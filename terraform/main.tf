@@ -21,7 +21,26 @@ data "aws_caller_identity" "current" {}
 resource "random_id" "suffix" {
   byte_length = 4
 }
+resource "aws_kms_key" "s3" {
+  description             = "KMS key for secpipeline demo bucket"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true
 
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EnableRootAccountAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      }
+    ]
+  })
+}
 resource "aws_kms_key" "s3" {
   description             = "KMS key for secpipeline demo bucket"
   deletion_window_in_days = 7
@@ -188,4 +207,22 @@ output "bucket_name" {
 
 output "role_arn" {
   value = aws_iam_role.app.arn
+}
+resource "aws_s3_bucket_lifecycle_configuration" "logs" {
+  bucket = aws_s3_bucket.logs.id
+
+  rule {
+    id     = "expire-old-logs"
+    status = "Enabled"
+
+    filter {}
+
+    expiration {
+      days = 90
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
 }
