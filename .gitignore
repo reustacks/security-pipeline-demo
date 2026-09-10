@@ -5,3 +5,11 @@ venv/
 *.db
 .env
 .pytest_cache/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
