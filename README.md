@@ -1,12 +1,102 @@
+# Security Pipeline Demo
 
-Both packages were pinned at versions that were current when written and had
-published advisories by the time the pipeline ran. No amount of care at the time
-of writing prevents this — pinned versions rot, and only a scanner running
-continuously catches the moment they do.
+A CI/CD security pipeline built with GitHub Actions. It checks for secrets, vulnerable dependencies, and insecure code patterns on every push and pull
+request.
 
-**Fix:** upgraded to the patched versions and re-ran the test suite to confirm
-the upgrade did not break the application. Patching without verifying trades a
-vulnerability for an outage.
+The Flask API in this repo is deliberately small. It's there to give the
+pipeline something to scan.
+
+---
+
+## What the pipeline does
+
+Four jobs run in parallel on every push and pull request:
+
+| Job | Tool | Catches | Blind to |
+|---|---|---|---|
+| `test` | pytest | Broken functionality | Security issues |
+| `secrets-scan` | Gitleaks | Committed credentials, including in git history | Logic flaws |
+| `dependency-scan` | pip-audit | Known CVEs in third-party packages | Bugs in first-party code |
+| `sast` | Semgrep | Insecure patterns in source code | Runtime and config issues |
+
+Each tool covers different ground and they don't overlap much. A secrets scanner
+won't find a SQL injection. A SAST tool won't tell you a dependency you pinned
+six months ago now has a published CVE.
+
+`test` is in there because a patched dependency that breaks the app isn't
+actually a fix.
+
+### A few notes on the config
+
+**`fetch-depth: 0` on the secrets scan.** The default checkout only pulls the
+latest commit. Secrets often sit in history, and a key that was committed then
+deleted is still in the git objects. Full history is needed for the scan to mean
+anything.
+
+**Three Semgrep rule packs** (`p/default`, `p/python`, `p/flask`).
+Framework-specific rules catch things the generic ones miss. The Flask pack is
+what found the host-binding issue below.
+
+**Semgrep runs in its own container** via `container: image: semgrep/semgrep`,
+so the tool is already installed and there's no setup step to go wrong.
+
+---
+
+## What it caught
+
+I didn't plant any vulnerabilities. Everything below came up on the scanners'
+first run against normal starter code, which honestly makes a better case for
+running them than a planted bug would.
+
+### 1. Eight unpinned GitHub Actions (Semgrep)
+
+**Rule:** `yaml.github-actions.security.github-actions-mutable-action-tag`
+
+Every action was referenced by tag: `actions/checkout@v4`,
+`actions/setup-python@v5`, `gitleaks/gitleaks-action@v2`.
+
+Tags are movable. Whoever controls an action's repo can repoint `v4` at
+different code, and every workflow using that tag will pull it and run it with a
+`GITHUB_TOKEN` in scope. This has happened for real: `tj-actions/changed-files`,
+`trivy-action`, and `kics-github-action` were all compromised this way.
+
+**Fix:** pinned every action to a full 40-character commit SHA, which can't be
+moved. I kept the version comments (`# v4`) so Dependabot can still tell what
+version a SHA is and open update PRs.
+
+```yaml
+# Before
+- uses: actions/checkout@v4
+
+# After
+- uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+```
+
+I pulled the SHAs from the GitHub API rather than copying them out of a blog
+post:
+
+```bash
+gh api repos/actions/checkout/git/ref/tags/v4 --jq .object.sha
+```
+
+Worth noting the first thing this security pipeline found was a problem with the
+security pipeline.
+
+### 2. Three CVEs in pinned dependencies (pip-audit)
+
+```
+Name    Version  ID                Fix Versions
+flask   3.0.3    PYSEC-2026-2151   3.1.3
+pytest  8.2.0    PYSEC-2026-1845   9.0.3
+```
+
+Both were pinned at versions that were fine when I wrote them and had advisories
+published by the time the pipeline ran. There's no version you can pick that
+stays safe, which is the whole reason to have a scanner running on every push.
+
+**Fix:** bumped to the patched versions, then re-ran the tests to check the
+upgrade hadn't broken anything. Flask 3.0 to 3.1 and pytest 8 to 9 are big
+enough jumps that this wasn't guaranteed.
 
 ### 3. Flask bound to all network interfaces (Semgrep)
 
@@ -16,12 +106,12 @@ vulnerability for an outage.
 app.run(debug=False, host="0.0.0.0", port=5000)
 ```
 
-`0.0.0.0` binds to every network interface, exposing the development server to
-the local network rather than just the loopback interface.
+`0.0.0.0` binds to every network interface, so the dev server is reachable from
+the local network instead of just localhost.
 
-**Fix:** default to `127.0.0.1`, with an explicit environment variable required
-to widen the binding. The insecure option remains available for the cases that
-genuinely need it, but it now has to be chosen deliberately.
+**Fix:** default to `127.0.0.1` and require an environment variable to widen it.
+The insecure option is still there for cases that need it, but you have to
+choose it on purpose now.
 
 ```python
 host = os.environ.get("FLASK_HOST", "127.0.0.1")
@@ -32,14 +122,12 @@ app.run(debug=False, host=host, port=5000)
 
 ## Pipeline history
 
-The commit history shows the full detect-fix-verify cycle:
-
 | Commit | Result |
 |---|---|
-| Initial commit: Flask app + starter CI | Pass — baseline with tests and Gitleaks only |
-| Add pip-audit and Semgrep | **Fail** — 8 SAST findings, 3 CVEs |
-| Pin actions to SHAs, patch CVEs | **Fail** — down to 1 finding |
-| Bind Flask to localhost | Pass — all four jobs green |
+| Initial commit: Flask app + starter CI | Pass. Baseline with tests and Gitleaks only |
+| Add pip-audit and Semgrep | **Fail.** 8 SAST findings, 3 CVEs |
+| Pin actions to SHAs, patch CVEs | **Fail.** Down to 1 finding |
+| Bind Flask to localhost | Pass. All four jobs green |
 
 ![Pipeline failing](docs/pipeline-failing.png)
 
@@ -47,40 +135,31 @@ The commit history shows the full detect-fix-verify cycle:
 
 ---
 
-## Tool choices
+## Why these tools
 
-**Semgrep over CodeQL.** CodeQL has deeper dataflow analysis and is the stronger
-tool for finding complex vulnerabilities. Semgrep was chosen here for faster
-feedback, simpler configuration, and rule packs that are readable as plain YAML
-— which matters more for a project whose purpose is to demonstrate the pipeline
-rather than to secure a large codebase. On a production Python service I would
-run both.
+**Semgrep over CodeQL.** CodeQL does deeper dataflow analysis and would find
+more. I went with Semgrep for faster feedback and because the rule packs are
+readable YAML, which matters more for a project meant to demonstrate the
+pipeline than to secure a big codebase. On a real Python service I'd run both.
 
-**pip-audit over Dependabot alone.** Dependabot opens pull requests but does not
-fail a build. pip-audit runs as a gate, so a vulnerable dependency cannot merge
-unnoticed. The two are complementary: Dependabot for the fix, pip-audit for the
-enforcement.
+**pip-audit over just Dependabot.** Dependabot opens PRs but doesn't fail a
+build. pip-audit is a gate, so a vulnerable dependency can't merge quietly. They
+work well together: Dependabot for the fix, pip-audit for the enforcement.
 
-**Gitleaks over TruffleHog.** Both are capable. Gitleaks was chosen for its
-simpler GitHub Actions integration and lower configuration overhead at this
-scale.
+**Gitleaks over TruffleHog.** Both are fine. Gitleaks had the simpler Actions
+integration and less config to get working at this size.
 
 ---
 
-## Known limitations
+## Limitations
 
-Worth being explicit about, since a pipeline that appears to have no downsides
-usually just has undocumented ones:
-
-- **False positives are real.** SAST tools flag patterns, not exploits. Some
-  findings will be unreachable code paths. Managing that triage burden — rather
-  than suppressing rules wholesale — is the actual work.
-- **pip-audit fails on any published CVE**, including ones in code paths the
-  application never executes. This is the correct default but generates noise.
-- **SHA pinning has a maintenance cost.** Pins do not update themselves;
-  Dependabot is what keeps this sustainable.
-- **No runtime testing.** Everything here is static analysis. DAST and container
-  scanning would cover different ground.
+- **False positives happen.** SAST flags patterns, not exploits, so some
+  findings are unreachable code paths. Triaging that is real work and I haven't
+  had to do much of it yet at this scale.
+- **pip-audit fails on any published CVE**, even in code paths the app never
+  touches. Right default, but noisy.
+- **SHA pins don't update themselves.** Without Dependabot this gets stale fast.
+- **All static analysis.** No DAST, no container scanning. Different ground.
 
 ---
 
@@ -94,15 +173,14 @@ pytest -v
 python app.py
 ```
 
-The API exposes `/`, `/health`, and `/users/<username>`.
+Endpoints: `/`, `/health`, `/users/<username>`.
 
 ---
 
 ## Next steps
 
-- [ ] Branch protection requiring all four checks to pass before merge
-- [ ] Terraform component (S3 bucket + IAM role) scanned with Checkov, applying
-      the same detect-fix-verify cycle to infrastructure as code
-- [ ] Dependabot configuration for automated dependency and action updates
-- [ ] SARIF upload so findings appear in the GitHub Security tab rather than
-      only in workflow logs
+- [ ] Branch protection requiring all four checks before merge
+- [ ] Terraform (S3 bucket + IAM role) scanned with Checkov, same detect-fix-verify
+      cycle applied to infrastructure
+- [ ] Dependabot config for dependency and action updates
+- [ ] SARIF upload so findings show in the Security tab instead of only in logs
