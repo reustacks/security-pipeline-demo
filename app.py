@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from flask import Flask, jsonify, request
 
@@ -49,4 +50,7 @@ def get_user(username):
 
 if __name__ == "__main__":
     init_db()
-    app.run(debug=False, host="0.0.0.0", port=5000)
+    # Bind to localhost by default. Set FLASK_HOST=0.0.0.0 explicitly
+    # if the app genuinely needs to be reachable from other machines.
+    host = os.environ.get("FLASK_HOST", "127.0.0.1")
+    app.run(debug=False, host=host, port=5000)
