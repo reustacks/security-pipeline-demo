@@ -1,0 +1,21 @@
+# Checkov configuration
+#
+# Each skipped check below is a deliberate decision, not an oversight.
+# Anything not listed here is expected to pass.
+
+skip-check:
+  # S3 event notifications. Nothing in this project consumes bucket
+  # events, so enabling them would add configuration with no subscriber.
+  # Would revisit if the app started reacting to object writes.
+  - CKV2_AWS_62
+
+  # Cross-region replication. Roughly doubles storage cost and is aimed
+  # at DR requirements this project does not have. A production bucket
+  # holding data that mattered would enable it.
+  - CKV_AWS_144
+
+  # KMS encryption on the access-log bucket. The log bucket uses SSE-S3
+  # (AES256) rather than KMS. Access logs are not sensitive here, and KMS
+  # adds a per-request cost on a bucket written to frequently. The data
+  # bucket does use KMS.
+  - CKV_AWS_145
