@@ -41,11 +41,6 @@ resource "aws_kms_key" "s3" {
     ]
   })
 }
-resource "aws_kms_key" "s3" {
-  description             = "KMS key for secpipeline demo bucket"
-  deletion_window_in_days = 7
-  enable_key_rotation     = true
-}
 
 resource "aws_kms_alias" "s3" {
   name          = "alias/secpipeline-demo-${random_id.suffix.hex}"
