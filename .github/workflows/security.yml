@@ -75,4 +75,4 @@ jobs:
         run: pip install checkov
 
       - name: Scan Terraform
-        run: checkov --directory terraform --framework terraform     
+        run: checkov --directory terraform --framework terraform --config-file .checkov.yml            
