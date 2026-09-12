@@ -10,7 +10,7 @@ pipeline something to scan.
 
 ## What the pipeline does
 
-Four jobs run in parallel on every push and pull request:
+Five jobs run in parallel on every push and pull request:
 
 | Job | Tool | Catches | Blind to |
 |---|---|---|---|
@@ -18,6 +18,7 @@ Four jobs run in parallel on every push and pull request:
 | `secrets-scan` | Gitleaks | Committed credentials, including in git history | Logic flaws |
 | `dependency-scan` | pip-audit | Known CVEs in third-party packages | Bugs in first-party code |
 | `sast` | Semgrep | Insecure patterns in source code | Runtime and config issues |
+| `iac-scan` | Checkov, `terraform fmt`, `terraform validate` | Misconfigured infrastructure, malformed or invalid Terraform | Application-level issues |
 
 Each tool covers different ground and they don't overlap much. A secrets scanner
 won't find a SQL injection. A SAST tool won't tell you a dependency you pinned
@@ -30,12 +31,10 @@ actually a fix.
 
 **`fetch-depth: 0` on the secrets scan.** The default checkout only pulls the
 latest commit. Secrets often sit in history, and a key that was committed then
-deleted is still in the git objects. Full history is needed for the scan to mean
-anything.
+deleted is still in the git objects. Full history is needed for the scan to mean anything.
 
 **Three Semgrep rule packs** (`p/default`, `p/python`, `p/flask`).
-Framework-specific rules catch things the generic ones miss. The Flask pack is
-what found the host-binding issue below.
+Framework-specific rules catch things the generic ones miss. The Flask pack is what found the host-binding issue below.
 
 **Semgrep runs in its own container** via `container: image: semgrep/semgrep`,
 so the tool is already installed and there's no setup step to go wrong.
@@ -45,8 +44,7 @@ so the tool is already installed and there's no setup step to go wrong.
 ## What it caught
 
 I didn't plant any vulnerabilities. Everything below came up on the scanners'
-first run against normal starter code, which honestly makes a better case for
-running them than a planted bug would.
+first run against normal starter code, which honestly makes a better case for running them than a planted bug would.
 
 ### 1. Eight unpinned GitHub Actions (Semgrep)
 
@@ -56,8 +54,7 @@ Every action was referenced by tag: `actions/checkout@v4`,
 `actions/setup-python@v5`, `gitleaks/gitleaks-action@v2`.
 
 Tags are movable. Whoever controls an action's repo can repoint `v4` at
-different code, and every workflow using that tag will pull it and run it with a
-`GITHUB_TOKEN` in scope. This has happened for real: `tj-actions/changed-files`,
+different code, and every workflow using that tag will pull it and run it with a `GITHUB_TOKEN` in scope. This has happened for real: `tj-actions/changed-files`,
 `trivy-action`, and `kics-github-action` were all compromised this way.
 
 **Fix:** pinned every action to a full 40-character commit SHA, which can't be
@@ -135,6 +132,28 @@ app.run(debug=False, host=host, port=5000)
 
 ---
 
+## Infrastructure as Code
+
+The pipeline also scans the Terraform in `terraform/`, which sets up a KMS key, two S3 buckets (one for data, one for access logs), and the IAM role and policy the app would run under. I wrote it deliberately misconfigured at first, then hardened it against Checkov using the same catch-fix-verify pattern as the app.
+
+### 26 findings down to 0
+
+Checkov started at 26 failures. Most were the usual things: turn on bucket versioning, block public access, replace a wildcard KMS policy with specific actions. Three I left alone on purpose, and wrote up why in `.checkov.yml`:
+
+| Check | What it wants | Why I skipped it |
+|---|---|---|
+| `CKV2_AWS_62` | S3 event notifications | Nothing's listening. No Lambda or SQS queue to notify |
+| `CKV_AWS_144` | Cross-region replication | No disaster recovery requirement here, and it costs money for nothing |
+| `CKV_AWS_145` | KMS on the log bucket | That bucket gets written to constantly. AES256 is fine and KMS would add a per-request charge for no real gain |
+
+One gotcha: `CKV2_*` checks are graph checks, and they ignore inline `#checkov:skip` comments. They only listen to the config file, which is why the exceptions live in `.checkov.yml` instead of next to the resources.
+
+### Checkov passed a file Terraform wouldn't touch
+
+At one point `terraform/main.tf` had `aws_kms_key "s3"` defined twice, a real block plus a leftover five-line stub from an earlier edit. Checkov only checks for misconfigurations, it doesn't check whether the HCL is even valid, so it passed the file clean and `iac-scan` stayed green. The duplicate merged into `main`. Terraform itself has no such patience:
+
+---
+
 ## Why these tools
 
 **Semgrep over CodeQL.** CodeQL does deeper dataflow analysis and would find
@@ -177,10 +196,16 @@ Endpoints: `/`, `/health`, `/users/<username>`.
 
 ---
 
+## Branch protection
+
+All five checks have to pass before anything merges into `main`. No direct pushes either. I confirmed this by trying to push straight to main and getting bounced:
+
+
+![Branch protection rejection](docs/branch-protection-rejection.png)
+
+---
+
 ## Next steps
 
-- [ ] Branch protection requiring all four checks before merge
-- [ ] Terraform (S3 bucket + IAM role) scanned with Checkov, same detect-fix-verify
-      cycle applied to infrastructure
 - [ ] Dependabot config for dependency and action updates
 - [ ] SARIF upload so findings show in the Security tab instead of only in logs
