@@ -89,4 +89,20 @@ jobs:
         run: pip install checkov
 
       - name: Scan Terraform
-        run: checkov --directory terraform --framework terraform --config-file .checkov.yml       
+        run: checkov --directory terraform --framework terraform --config-file .checkov.yml
+
+  container-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build image
+        run: docker build -t security-pipeline-demo:${{ github.sha }} .
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: security-pipeline-demo:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"

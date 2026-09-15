@@ -26,6 +26,12 @@ def init_db():
     conn.close()
 
 
+# Run at import time (not just under `if __name__ == "__main__"`) so the
+# table exists whether the app is started with `python app.py` or imported
+# by a WSGI server like gunicorn, which never executes as __main__.
+init_db()
+
+
 @app.route("/")
 def index():
     return jsonify({"status": "ok", "service": "security-pipeline-demo"})
@@ -49,7 +55,6 @@ def get_user(username):
 
 
 if __name__ == "__main__":
-    init_db()
     # Bind to localhost by default. Set FLASK_HOST=0.0.0.0 explicitly
     # if the app genuinely needs to be reachable from other machines.
     host = os.environ.get("FLASK_HOST", "127.0.0.1")
