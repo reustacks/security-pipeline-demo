@@ -1,0 +1,19 @@
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+terraform/
+docs/
+.checkov.yml
+*.md
+
+# Dev artifacts — the container builds its own users.db via init_db()
+# at import time, it shouldn't inherit your local one.
+*.db
+.env
+
+# Test code has no reason to ship in the runtime image.
+tests/
