@@ -1,6 +1,12 @@
 # Slim base: smaller image, smaller attack surface than the full python image.
 FROM python:3.12-slim
 
+# Upgrade OS packages before installing anything else. The base image
+# tag can lag behind Debian's own security patches by days or weeks,
+# and this is exactly the gap container-scan (Trivy) catches: CVEs in
+# packages baked into the base image, not in requirements.txt.
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+
 # Dedicated non-root user. Matches the least-privilege pattern used
 # elsewhere in this project (the IAM policy scoped to one bucket ARN, no
 # root AWS user) applied one layer down, to the container itself.
@@ -19,7 +25,7 @@ COPY app.py .
 
 # Safe here specifically because Docker's network isolation means
 # 0.0.0.0 inside the container is only reachable via an explicit `-p`
-# port mapping to the host — unlike binding 0.0.0.0 directly on a bare
+# port mapping to the host, unlike binding 0.0.0.0 directly on a bare
 # host, which exposes the port to the whole network.
 ENV FLASK_HOST=0.0.0.0
 
