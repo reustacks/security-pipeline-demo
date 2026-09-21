@@ -37,6 +37,33 @@ resource "aws_kms_key" "s3" {
         }
         Action   = "kms:*"
         Resource = "*"
+      },
+      {
+        # Name the applying identity as a key administrator explicitly.
+        # Without this, KMS rejects the key at creation because nothing in
+        # the policy itself lets the caller manage it later.
+        Sid    = "AllowKeyAdministration"
+        Effect = "Allow"
+        Principal = {
+          AWS = data.aws_caller_identity.current.arn
+        }
+        Action = [
+          "kms:Create*",
+          "kms:Describe*",
+          "kms:Enable*",
+          "kms:List*",
+          "kms:Put*",
+          "kms:Update*",
+          "kms:Revoke*",
+          "kms:Disable*",
+          "kms:Get*",
+          "kms:Delete*",
+          "kms:ScheduleKeyDeletion",
+          "kms:CancelKeyDeletion",
+          "kms:TagResource",
+          "kms:UntagResource"
+        ]
+        Resource = "*"
       }
     ]
   })
