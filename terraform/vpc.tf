@@ -1,10 +1,18 @@
 data "aws_availability_zones" "available" {
-  state = "available"
+  # An identity filter (zone-name/zone-id) pins an explicit allowlist, so
+  # this data source's result set can't silently expand if AWS adds a new
+  # AZ to the region. Without it, the list is open-ended, and slicing "the
+  # first two" from it could shift on a future apply and force replacement
+  # of every resource tied to an availability zone.
+  filter {
+    name   = "zone-name"
+    values = ["us-west-2a", "us-west-2b"]
+  }
 }
 
 locals {
   # EKS needs subnets in at least two availability zones.
-  azs = slice(data.aws_availability_zones.available.names, 0, 2)
+  azs = data.aws_availability_zones.available.names
 }
 
 resource "aws_vpc" "main" {
