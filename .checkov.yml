@@ -19,3 +19,9 @@ skip-check:
   # adds a per-request cost on a bucket written to frequently. The data
   # bucket does use KMS.
   - CKV_AWS_145
+
+  # VPC flow logs. Proper flow logging needs a log group, an IAM role, and
+  # a KMS key policy that lets CloudWatch use the key, plus ongoing ingest
+  # cost, for a lab network that carries no real traffic. A production VPC
+  # would enable it. Would revisit alongside the observability step.
+  - CKV2_AWS_11
